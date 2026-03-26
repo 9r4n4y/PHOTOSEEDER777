@@ -15,97 +15,61 @@ import {
   Terminal, 
   Check,
   Shield,
-  Cpu,
   Eye,
   EyeOff,
   HelpCircle,
-  Github,
   X,
   Lock,
-  Zap,
-  AlertCircle
+  Unlock,
+  AlertCircle,
+  QrCode,
+  Scan,
+  FileText,
+  ChevronRight,
+  ChevronLeft,
+  Share2
 } from 'lucide-react';
 import CryptoJS from 'crypto-js';
-import LZString from 'lz-string';
+import * as fflate from 'fflate';
+import { QRCodeSVG } from 'qrcode.react';
+import { Html5QrcodeScanner } from 'html5-qrcode';
 import { cn } from './lib/utils';
 
 // --- Types ---
 interface ImageState {
   dataUrl: string | null;
-  seed: string | null;
-  realSeed: string | null;
-  encryptedPayload: string | null;
+  encryptedCode: string | null;
+  rawCode: string | null;
   dimensions: { width: number; height: number } | null;
 }
-
-// --- Neural Vault Utility (IndexedDB for high-capacity local storage) ---
-const vaultDB = {
-  dbName: 'PHOTOSEEDER777_Vault',
-  storeName: 'vault',
-  version: 1,
-
-  async getDB(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.version);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(this.storeName)) {
-          db.createObjectStore(this.storeName);
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  },
-
-  async set(key: string, value: string): Promise<void> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.storeName, 'readwrite');
-      const store = transaction.objectStore(this.storeName);
-      const request = store.put(value, key);
-      request.onsuccess = () => resolve();
-      request.onerror = () => reject(request.error);
-    });
-  },
-
-  async get(key: string): Promise<string | null> {
-    const db = await this.getDB();
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.storeName, 'readonly');
-      const store = transaction.objectStore(this.storeName);
-      const request = store.get(key);
-      request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(request.error);
-    });
-  }
-};
 
 export default function App() {
   const [state, setState] = useState<ImageState>({
     dataUrl: null,
-    seed: null,
-    realSeed: null,
-    encryptedPayload: null,
+    encryptedCode: null,
+    rawCode: null,
     dimensions: null,
   });
   const [mode, setMode] = useState<'encode' | 'decode'>('encode');
-  const [inputSeed, setInputSeed] = useState('');
+  const [inputCode, setInputCode] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isEncryptedMode, setIsEncryptedMode] = useState(false);
+  const [isEncryptedMode, setIsEncryptedMode] = useState(true);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [showRealSeed, setShowRealSeed] = useState(false);
+  const [showRawCode, setShowRawCode] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [showPreview, setShowPreview] = useState(true);
   const [processingStep, setProcessingStep] = useState('');
+  const [showQrModal, setShowQrModal] = useState<{ show: boolean; data: string | null }>({ show: false, data: null });
+  const [showScanner, setShowScanner] = useState(false);
   
-  const [showHelp, setShowHelp] = useState(false);
-  const [isBooting, setIsBooting] = useState(true);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   
+  const QR_MAX_LENGTH = 2900;
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const decodeFileInputRef = useRef<HTMLInputElement>(null);
+  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
 
   const triggerToast = (message: string) => {
     setToastMessage(message);
@@ -113,145 +77,24 @@ export default function App() {
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  useEffect(() => {
-    const timer = setTimeout(() => setIsBooting(false), 3500);
-    return () => clearTimeout(timer);
-  }, []);
-
-  // --- Components ---
-  const ScrambleText = ({ text }: { text: string }) => {
-    const [displayedText, setDisplayedText] = useState(text);
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+";
-    
-    useEffect(() => {
-      let iteration = 0;
-      let interval: any = null;
-
-      const startScramble = () => {
-        clearInterval(interval);
-        iteration = 0;
-        interval = setInterval(() => {
-          setDisplayedText(text.split("").map((char, index) => {
-            if (index < iteration) return text[index];
-            return chars[Math.floor(Math.random() * chars.length)];
-          }).join(""));
-          
-          if (iteration >= text.length) {
-            clearInterval(interval);
-          }
-          iteration += 1 / 4;
-        }, 40);
-      };
-
-      startScramble();
-      const triggerInterval = setInterval(startScramble, 12000);
-
-      return () => {
-        clearInterval(interval);
-        clearInterval(triggerInterval);
-      };
-    }, [text]);
-
-    return <span className="font-mono inline-block min-w-[14ch]">{displayedText}</span>;
+  // --- Neural Algorithm Utilities ---
+  const compress = (data: string): string => {
+    const uint8 = new TextEncoder().encode(data);
+    const compressed = fflate.zlibSync(uint8, { level: 9 });
+    let binary = '';
+    const len = compressed.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(compressed[i]);
+    }
+    return btoa(binary);
   };
 
-  const TypingText = ({ text, speed = 30 }: { text: string; speed?: number }) => {
-    const [displayedText, setDisplayedText] = useState('');
-    
-    useEffect(() => {
-      let i = 0;
-      setDisplayedText('');
-      const interval = setInterval(() => {
-        setDisplayedText(text.slice(0, i + 1));
-        i++;
-        if (i >= text.length) clearInterval(interval);
-      }, speed);
-      return () => clearInterval(interval);
-    }, [text, speed]);
-
-    return <span className="font-mono">{displayedText}</span>;
-  };
-
-  const BootSequence = () => {
-    const lines = [
-      "INITIALIZING_KERNEL_777...",
-      "LOADING_BABEL_PROTOCOLS...",
-      "ESTABLISHING_SECURE_BUFFER...",
-      "BYPASSING_CLOUD_LATENCY...",
-      "SYSTEM_READY_FOR_INGESTION."
-    ];
-    
-    return (
-      <motion.div 
-        initial={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[200] bg-terminal-bg flex flex-col items-center justify-center p-8"
-      >
-        <div className="max-w-md w-full space-y-4">
-          <div className="flex items-center gap-4 mb-8">
-            <div className="w-12 h-12 bg-terminal-accent flex items-center justify-center shadow-[0_0_20px_rgba(0,255,157,0.4)]">
-              <Eye className="text-terminal-bg w-7 h-7" />
-            </div>
-            <h1 className="text-2xl font-bold text-terminal-accent tracking-tighter">PHOTOSEEDER777</h1>
-          </div>
-          <div className="space-y-2">
-            {lines.map((line, i) => (
-              <div key={i} className="text-xs font-mono text-terminal-accent/60 flex gap-3">
-                <span className="opacity-30">[{i + 1}]</span>
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: i * 0.6 }}
-                >
-                  <TypingText text={line} speed={20} />
-                </motion.div>
-              </div>
-            ))}
-          </div>
-          <motion.div 
-            initial={{ width: 0 }}
-            animate={{ width: "100%" }}
-            transition={{ duration: 3, ease: "linear" }}
-            className="h-1 bg-terminal-accent mt-12 shadow-[0_0_10px_rgba(0,255,157,0.5)]"
-          />
-        </div>
-      </motion.div>
-    );
-  };
-
-  const DataStream = () => {
-    const [streams] = useState(() => 
-      Array.from({ length: 15 }).map(() => ({
-        left: `${Math.random() * 100}%`,
-        duration: 5 + Math.random() * 5,
-        delay: Math.random() * 5,
-        chars: Array.from({ length: 20 }).map(() => (Math.random() > 0.5 ? '1' : '0'))
-      }))
-    );
-
-    return (
-      <div className="fixed inset-0 pointer-events-none overflow-hidden opacity-[0.05]">
-        {streams.map((stream, i) => (
-          <motion.div
-            key={i}
-            initial={{ y: -100, opacity: 0 }}
-            animate={{ y: "100vh", opacity: [0, 1, 0] }}
-            transition={{ 
-              duration: stream.duration, 
-              repeat: Infinity, 
-              delay: stream.delay,
-              ease: "linear"
-            }}
-            style={{ left: stream.left }}
-            className="absolute text-[10px] font-mono text-terminal-accent flex flex-col gap-2"
-          >
-            {stream.chars.map((char, j) => (
-              <span key={j}>{char}</span>
-            ))}
-          </motion.div>
-        ))}
-      </div>
-    );
+  const decompress = (base64: string): string => {
+    const binary = atob(base64);
+    const uint8 = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) uint8[i] = binary.charCodeAt(i);
+    const decompressed = fflate.unzlibSync(uint8);
+    return new TextDecoder().decode(decompressed);
   };
 
   // --- Logic: Encoding ---
@@ -262,8 +105,13 @@ export default function App() {
   };
 
   const processFile = (file: File) => {
+    if (isEncryptedMode && !password) {
+      triggerToast("PASSWORD_REQUIRED: ENTER_PASSWORD_TO_ENCRYPT");
+      return;
+    }
+
     setIsProcessing(true);
-    setProcessingStep('INITIALIZING_LOSSLESS_BUFFER...');
+    setProcessingStep('INGESTING_IMAGE...');
     
     const reader = new FileReader();
     reader.onload = (event) => {
@@ -271,68 +119,47 @@ export default function App() {
       img.onload = () => {
         setProcessingStep('MAPPING_PIXELS...');
         
-        // Strictly lossless: no resizing
-        const width = img.width;
-        const height = img.height;
-
         const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = img.width;
+        canvas.height = img.height;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
         
-        ctx.imageSmoothingEnabled = false; // Disable smoothing for true lossless
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.drawImage(img, 0, 0);
         
-        setProcessingStep('ENCRYPTING_NEURAL_PAYLOAD...');
+        setProcessingStep('GENERATING_LOSSLESS_PAYLOAD...');
         
-        canvas.toBlob((blob) => {
-          if (!blob) {
+        // Lossless PNG
+        const base64data = canvas.toDataURL('image/png');
+        const cleanData = base64data.split(',')[1];
+        const rawCode = `N:${compress(cleanData)}`;
+        let encryptedCode = null;
+        
+        if (isEncryptedMode && password) {
+          setProcessingStep('APPLYING_AES_ENCRYPTION...');
+          try {
+            const encrypted = CryptoJS.AES.encrypt(rawCode, password).toString();
+            encryptedCode = `E:${compress(encrypted)}`;
+          } catch (err) {
+            console.error('Encryption failed:', err);
+            triggerToast("ENCRYPTION_FAILED: SYSTEM_ERROR");
             setIsProcessing(false);
-            setProcessingStep('');
             return;
           }
+        }
 
-          const reader = new FileReader();
-          reader.onloadend = async () => {
-            const base64data = reader.result as string;
-            const typeFlag = blob.type === 'image/webp' ? 'W' : 'P';
-            const cleanData = base64data.split(',')[1];
-            const realSeed = `${typeFlag}:${cleanData}`;
-            let optimizedSeed = realSeed;
-            let encryptedPayload = null;
-            
-            if (isEncryptedMode && password) {
-              setProcessingStep('APPLYING_AES_ENCRYPTION...');
-              try {
-                const encrypted = CryptoJS.AES.encrypt(realSeed, password).toString();
-                const compressed = LZString.compressToEncodedURIComponent(encrypted);
-                encryptedPayload = `E:${compressed}`;
-                optimizedSeed = encryptedPayload;
-              } catch (err) {
-                console.error('Encryption failed:', err);
-                triggerToast("ENCRYPTION_FAILED: CHECK_PASSWORD");
-                setIsProcessing(false);
-                return;
-              }
-            }
-
-            setProcessingStep('FINALIZING_KEY...');
-            setTimeout(() => {
-              setState({
-                dataUrl: base64data,
-                seed: optimizedSeed,
-                realSeed: realSeed,
-                encryptedPayload: encryptedPayload,
-                dimensions: { width, height },
-              });
-              setIsProcessing(false);
-              setProcessingStep('');
-              triggerToast("ENCODE_SUCCESS: NEURAL_VAULT_KEY_GENERATED");
-            }, 800);
-          };
-          reader.readAsDataURL(blob);
-        }, 'image/webp', 1.0);
+        setProcessingStep('FINALIZING_VAULT_PAYLOAD...');
+        setTimeout(() => {
+          setState({
+            dataUrl: base64data,
+            encryptedCode: encryptedCode,
+            rawCode: rawCode,
+            dimensions: { width: img.width, height: img.height },
+          });
+          setIsProcessing(false);
+          setProcessingStep('');
+          triggerToast("ENCODE_SUCCESS: PAYLOAD_READY");
+        }, 800);
       };
       img.src = event.target?.result as string;
     };
@@ -340,493 +167,257 @@ export default function App() {
   };
 
   // --- Logic: Decoding ---
-  const handleDecode = () => {
-    if (!inputSeed.trim()) return;
+  const handleDecode = (codeToDecode?: string) => {
+    const code = codeToDecode || inputCode.trim();
+    if (!code) return;
+    
     setIsProcessing(true);
-    setProcessingStep('DECRYPTING_KEY...');
+    setProcessingStep('ANALYZING_PAYLOAD...');
     
     setTimeout(() => {
       try {
-        let currentSeed = inputSeed.trim();
+        let currentCode = code;
         
-        if (currentSeed.startsWith('VAULT:')) {
-          const vaultId = currentSeed.substring(6);
-          vaultDB.get(`vault_${vaultId}`).then(stored => {
-            if (stored) {
-              processSeed(stored, stored);
-            } else {
-              const oldStored = localStorage.getItem(`vault_${vaultId}`);
-              if (oldStored) {
-                processSeed(oldStored, oldStored);
-              } else {
-                triggerToast('VAULT_ERROR: DATA_NOT_FOUND_LOCALLY');
-                setIsProcessing(false);
-                setProcessingStep('');
-              }
-            }
-          }).catch(() => {
-            triggerToast('VAULT_ERROR: DATABASE_ACCESS_FAILED');
+        // 1. Handle Encryption
+        if (currentCode.startsWith('E:')) {
+          if (!password) {
+            triggerToast('DECRYPTION_ERROR: PASSWORD_REQUIRED');
             setIsProcessing(false);
             setProcessingStep('');
-          });
-          return;
-        }
+            return;
+          }
+          
+          setProcessingStep('DECRYPTING_ALGORITHM...');
+          const compressedEncrypted = currentCode.substring(2);
+          try {
+            const encryptedData = decompress(compressedEncrypted);
+            const bytes = CryptoJS.AES.decrypt(encryptedData, password);
+            const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+            if (!decrypted || !decrypted.startsWith('N:')) throw new Error('Invalid password');
+            currentCode = decrypted;
+          } catch (err) {
+            triggerToast('DECRYPTION_ERROR: INVALID_PASSWORD');
+            setIsProcessing(false);
+            setProcessingStep('');
+            return;
+          }
+        } 
 
-        processSeed(currentSeed, null);
+        // 2. Handle Decompression
+        if (currentCode.startsWith('N:')) {
+          setProcessingStep('RECONSTRUCTING_PIXELS...');
+          try {
+            const decompressed = decompress(currentCode.substring(2));
+            const dataUrl = `data:image/png;base64,${decompressed}`;
+            
+            const img = new Image();
+            img.onload = () => {
+              setState({
+                dataUrl: dataUrl,
+                encryptedCode: code.startsWith('E:') ? code : null,
+                rawCode: currentCode,
+                dimensions: { width: img.width, height: img.height },
+              });
+              setIsProcessing(false);
+              setProcessingStep('');
+              triggerToast("DECODE_SUCCESS: IMAGE_RECONSTRUCTED");
+            };
+            img.src = dataUrl;
+          } catch (err) {
+            triggerToast('DECODING_ERROR: PAYLOAD_CORRUPTED');
+            setIsProcessing(false);
+            setProcessingStep('');
+          }
+        } else {
+          throw new Error('Invalid code format');
+        }
       } catch (err) {
-        triggerToast('DECODING_ERROR: KEY_CORRUPTED');
+        triggerToast('DECODING_ERROR: INVALID_PAYLOAD');
         setIsProcessing(false);
         setProcessingStep('');
       }
     }, 1000);
   };
 
-  const processSeed = (seedToProcess: string, originalEncryptedPayload: string | null) => {
-    try {
-      let currentSeed = seedToProcess;
-      let decryptedSeed: string | null = null;
-      let encryptedPayload = originalEncryptedPayload;
-
-      if (currentSeed.startsWith('E:')) {
-        encryptedPayload = currentSeed;
-        if (!password) {
-          triggerToast('DECRYPTION_ERROR: PASSWORD_REQUIRED');
-          setIsProcessing(false);
-          setProcessingStep('');
-          return;
-        }
-        
-        setProcessingStep('DECRYPTING_AES_PAYLOAD...');
-        const compressedData = currentSeed.substring(2);
-        try {
-          const encryptedData = LZString.decompressFromEncodedURIComponent(compressedData);
-          if (!encryptedData) throw new Error('Decompression failed');
-          
-          const bytes = CryptoJS.AES.decrypt(encryptedData, password);
-          const decrypted = bytes.toString(CryptoJS.enc.Utf8);
-          if (!decrypted) throw new Error('Invalid password');
-          decryptedSeed = decrypted;
-          currentSeed = decrypted;
-        } catch (err) {
-          triggerToast('DECRYPTION_ERROR: INVALID_PASSWORD_OR_DATA');
-          setIsProcessing(false);
-          setProcessingStep('');
-          return;
-        }
-      } else if (isEncryptedMode) {
-        triggerToast('SECURITY_ERROR: ENCRYPTED_KEY_REQUIRED');
-        setIsProcessing(false);
-        setProcessingStep('');
-        return;
-      }
-
-      let decompressed = '';
-      if (currentSeed.startsWith('W:') || currentSeed.startsWith('P:')) {
-        const [type, data] = currentSeed.split(':');
-        const mime = type === 'W' ? 'image/webp' : 'image/png';
-        decompressed = `data:${mime};base64,${data}`;
-      } else {
-        decompressed = LZString.decompressFromEncodedURIComponent(currentSeed);
-      }
-
-      if (!decompressed || !decompressed.startsWith('data:image')) {
-        throw new Error('Invalid key format');
-      }
-      
-      const img = new Image();
-      img.onload = () => {
-        setProcessingStep('RECONSTRUCTING IMAGE...');
-        setTimeout(() => {
-          setState({
-            dataUrl: decompressed,
-            seed: inputSeed,
-            realSeed: decryptedSeed || currentSeed,
-            encryptedPayload: encryptedPayload,
-            dimensions: { width: img.width, height: img.height },
-          });
-          setIsProcessing(false);
-          setProcessingStep('');
-          triggerToast("DECODE_SUCCESS: IMAGE_RECONSTRUCTED");
-        }, 800);
-      };
-      img.src = decompressed;
-    } catch (err) {
-      triggerToast('DECODING_ERROR: KEY_CORRUPTED');
-      setIsProcessing(false);
-      setProcessingStep('');
-    }
+  const handleFileDecodeUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setInputCode(content);
+      handleDecode(content);
+    };
+    reader.readAsText(file);
   };
 
-  const handleSaveToLocalVault = async () => {
-    if (!state.seed || state.seed.startsWith('VAULT:')) return;
-    
-    setIsProcessing(true);
-    setProcessingStep('SAVING_TO_LOCAL_VAULT...');
-    
-    try {
-      const vaultId = Math.random().toString(36).substring(2, 10).toUpperCase();
-      const payload = state.encryptedPayload || state.realSeed || state.seed;
-      await vaultDB.set(`vault_${vaultId}`, payload);
-      
-      setState(prev => ({
-        ...prev,
-        seed: `VAULT:${vaultId}`
-      }));
-      
-      triggerToast(`SAVED: LOCAL_VAULT_CODE: VAULT:${vaultId}`);
-    } catch (err) {
-      console.error('Vault save failed:', err);
-      triggerToast("VAULT_ERROR: STORAGE_FAILED");
-    } finally {
-      setIsProcessing(false);
-      setProcessingStep('');
-    }
+  const startScanner = () => {
+    setShowScanner(true);
+    setTimeout(() => {
+      const scanner = new Html5QrcodeScanner(
+        "reader",
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        /* verbose= */ false
+      );
+      scanner.render((decodedText) => {
+        setInputCode(decodedText);
+        scanner.clear();
+        setShowScanner(false);
+        handleDecode(decodedText);
+      }, (error) => {
+        // console.warn(error);
+      });
+      scannerRef.current = scanner;
+    }, 100);
   };
 
-  const handleCopySuccess = () => {
-    setCopied(true);
-    triggerToast("KEY_COPIED_TO_CLIPBOARD");
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleCopyRefined = async (textToCopy: string) => {
-    if (!textToCopy) return;
-    
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(textToCopy);
-        handleCopySuccess();
-        return;
-      }
-    } catch (err) {
-      console.warn('Clipboard API failed, trying fallback:', err);
+  const stopScanner = () => {
+    if (scannerRef.current) {
+      scannerRef.current.clear();
+      scannerRef.current = null;
     }
-
-    try {
-      const textArea = document.createElement("textarea");
-      textArea.value = textToCopy;
-      textArea.setAttribute('readonly', '');
-      textArea.style.position = "fixed";
-      textArea.style.left = "-9999px";
-      textArea.style.top = "0";
-      textArea.style.width = "2em";
-      textArea.style.height = "2em";
-      textArea.style.padding = "0";
-      textArea.style.border = "none";
-      textArea.style.outline = "none";
-      textArea.style.boxShadow = "none";
-      textArea.style.background = "transparent";
-      textArea.style.fontSize = "16px";
-      
-      document.body.appendChild(textArea);
-      
-      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-      if (isIOS) {
-        const range = document.createRange();
-        range.selectNodeContents(textArea);
-        const selection = window.getSelection();
-        if (selection) {
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
-        textArea.setSelectionRange(0, 999999);
-      } else {
-        textArea.focus();
-        textArea.select();
-      }
-      
-      const successful = document.execCommand('copy');
-      document.body.removeChild(textArea);
-      
-      if (successful) {
-        handleCopySuccess();
-      } else {
-        throw new Error('execCommand returned false');
-      }
-    } catch (err) {
-      console.error('All copy methods failed:', err);
-      triggerToast("COPY_FAILED: USE_MANUAL_SELECT");
-    }
+    setShowScanner(false);
   };
 
   const handleDownload = () => {
     if (!state.dataUrl) return;
     const link = document.createElement('a');
-    const ext = state.dataUrl.includes('png') ? 'png' : 'webp';
-    link.download = `PHOTOSEEDER777_${Date.now()}.${ext}`;
+    link.download = `PHOTOSEEDER777_${Date.now()}.png`;
     link.href = state.dataUrl;
     link.click();
   };
 
-  const handleDownloadSeed = (seedToDownload: string, filename: string) => {
-    if (!seedToDownload) return;
-    const blob = new Blob([seedToDownload], { type: 'text/plain' });
+  const handleCopy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      triggerToast("COPIED_TO_CLIPBOARD");
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      triggerToast("COPY_FAILED");
+    }
+  };
+
+  const handleDownloadTxt = (data: string, name: string) => {
+    const blob = new Blob([data], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.download = filename;
     link.href = url;
+    link.download = `${name}.txt`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
   const reset = () => {
-    setState({ dataUrl: null, seed: null, realSeed: null, encryptedPayload: null, dimensions: null });
-    setInputSeed('');
-    setMode('encode');
-    setShowRealSeed(false);
+    setState({ dataUrl: null, encryptedCode: null, rawCode: null, dimensions: null });
+    setInputCode('');
+    setPassword('');
+    setShowRawCode(false);
   };
 
   return (
-    <div className="min-h-screen bg-terminal-bg text-terminal-text font-sans relative overflow-hidden selection:bg-terminal-accent selection:text-terminal-bg">
-      <AnimatePresence>
-        {isBooting && <BootSequence key="boot" />}
-      </AnimatePresence>
-
-      <DataStream />
-
-      {/* Background Effects */}
-      <div className="fixed inset-0 grid-bg opacity-10 pointer-events-none" />
-      <div className="fixed inset-0 bg-[radial-gradient(circle_at_center,rgba(0,255,157,0.05)_0%,transparent_70%)] pointer-events-none" />
-      <div className="fixed inset-0 scanline-overlay pointer-events-none z-50 opacity-[0.03]" />
-      <div className="fixed inset-0 noise-bg pointer-events-none opacity-[0.02]" />
-
-      {/* Help Modal */}
-      <AnimatePresence>
-        {showHelp && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex justify-center p-4 bg-terminal-bg/80 backdrop-blur-md overflow-y-auto items-start md:items-center"
-            onClick={() => setShowHelp(false)}
-          >
-            <motion.div 
-              initial={{ scale: 0.9, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.9, y: 20 }}
-              className="max-w-xl w-full my-auto bg-terminal-dim border border-terminal-accent/30 rounded-2xl p-6 md:p-8 shadow-[0_0_50px_rgba(0,255,157,0.2)] relative"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="absolute top-0 left-0 w-full h-1 bg-terminal-accent" />
-              <button 
-                onClick={() => setShowHelp(false)}
-                className="absolute top-4 right-4 p-2 hover:bg-terminal-accent/10 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5 text-terminal-accent" />
-              </button>
-              
-              <h2 className="text-2xl font-bold text-terminal-accent mb-6 flex items-center gap-3">
-                <HelpCircle className="w-6 h-6" />
-                SYSTEM_MANUAL
-              </h2>
-              
-              <div className="space-y-6 text-sm leading-relaxed opacity-80">
-                <section>
-                  <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Encoding</h3>
-                  <p>Select an image from your device. PHOTOSEEDER777 will map every pixel into a unique, encrypted "Neural Vault Key". This process is strictly lossless and happens entirely on your hardware.</p>
-                </section>
-                
-                <section>
-                  <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Sharing</h3>
-                  <p>Copy the generated Vault Key or save it as a file. This key contains all the data needed to reconstruct your image perfectly using our offline algorithm, without ever needing a database or cloud server.</p>
-                </section>
-                
-                <section>
-                  <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Encrypted Mode</h3>
-                  <p>Enable "Encrypted Mode" to protect your keys with a password. The resulting key will be AES-encrypted, making it impossible to reconstruct the image without the correct password. This ensures your visual data remains private even if the key string is shared.</p>
-                </section>
-                
-                <section>
-                  <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Decoding</h3>
-                  <p>Paste a Vault Key into the decoder. If the key is encrypted, you must provide the correct password used during encoding to reconstruct the original image with 1:1 pixel accuracy.</p>
-                </section>
-              </div>
-              
-              <div className="mt-8 pt-6 border-t border-terminal-accent/10 flex justify-end">
-                <button 
-                  onClick={() => setShowHelp(false)}
-                  className="px-6 py-2 bg-terminal-accent text-terminal-bg font-bold rounded-lg hover:shadow-[0_0_20px_rgba(0,255,157,0.4)] transition-all"
-                >
-                  ACKNOWLEDGE
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
+    <div className="min-h-screen bg-[#0a0a0a] text-[#00ff9d] font-mono selection:bg-[#00ff9d] selection:text-black">
+      {/* Scanline Effect */}
+      <div className="fixed inset-0 pointer-events-none z-50 opacity-[0.03] bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%]" />
+      
       {/* Header */}
-      <header className="relative z-10 border-b border-terminal-accent/20 bg-terminal-bg/90 backdrop-blur-xl p-4 md:p-6 shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <motion.div 
-            initial={{ x: -50, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            className="flex items-center gap-4"
-          >
-            <div className="w-12 h-12 bg-terminal-accent rounded-sm flex items-center justify-center shadow-[0_0_20px_rgba(0,255,157,0.4)] relative group overflow-hidden cursor-pointer glitch-hover">
-              <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-500" />
-              <div className="relative z-10 flex items-center justify-center">
-                <Eye className="text-terminal-bg w-7 h-7 group-hover:scale-110 transition-transform" />
-                <Zap className="absolute -top-1 -right-1 w-3 h-3 text-terminal-bg fill-terminal-bg opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-              <div className="absolute -top-1 -right-1 w-3 h-3 bg-terminal-bg rotate-45" />
+      <header className="border-b border-[#00ff9d]/20 p-4 md:p-6 bg-black/80 backdrop-blur-xl sticky top-0 z-40 shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
+        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3 self-start sm:self-auto">
+            <div className="w-10 h-10 bg-[#00ff9d] flex items-center justify-center rounded-sm shadow-[0_0_15px_rgba(0,255,157,0.3)]">
+              <Shield className="text-black w-6 h-6" />
             </div>
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold tracking-[-0.05em] text-terminal-accent glitch-subtle">
-                <ScrambleText text="PHOTOSEEDER777" />
-              </h1>
-            </div>
-          </motion.div>
-          
-          <motion.div 
-            initial={{ x: 50, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            className="flex items-center gap-4 md:gap-8"
-          >
+            <h1 className="text-xl font-bold tracking-tighter text-[#00ff9d] glitch-subtle">PHOTOSEEDER777</h1>
+          </div>
+          <div className="flex items-center gap-2 sm:gap-6 w-full sm:w-auto">
             <button 
-              onClick={() => setShowHelp(true)}
-              className="p-2.5 bg-terminal-accent/5 border border-terminal-accent/20 rounded-lg text-terminal-accent hover:bg-terminal-accent/10 transition-all tap-active"
-              title="How to use"
+              onClick={() => setMode('encode')}
+              className={cn(
+                "flex-1 sm:flex-none px-6 py-3 rounded-sm text-xs font-bold transition-all border uppercase tracking-widest",
+                mode === 'encode' ? "bg-[#00ff9d] text-black border-[#00ff9d] shadow-[0_0_15px_rgba(0,255,157,0.2)]" : "text-[#00ff9d]/60 border-transparent hover:text-[#00ff9d] hover:bg-[#00ff9d]/5"
+              )}
             >
-              <HelpCircle className="w-5 h-5" />
+              ENCODE
             </button>
-            <div className="hidden md:flex items-center gap-8 text-[10px] font-bold tracking-widest opacity-60">
-              <div className="flex items-center gap-2 group cursor-help">
-                <Shield className="w-3 h-3 text-terminal-accent group-hover:scale-125 transition-transform" />
-                <span className="group-hover:text-terminal-accent transition-colors">SECURE_LOCAL</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Terminal className="w-3 h-3 text-terminal-accent" />
-                <span>V.3.0.0-PRO</span>
-              </div>
-            </div>
-          </motion.div>
+            <button 
+              onClick={() => setMode('decode')}
+              className={cn(
+                "flex-1 sm:flex-none px-6 py-3 rounded-sm text-xs font-bold transition-all border uppercase tracking-widest",
+                mode === 'decode' ? "bg-[#00ff9d] text-black border-[#00ff9d] shadow-[0_0_15px_rgba(0,255,157,0.2)]" : "text-[#00ff9d]/60 border-transparent hover:text-[#00ff9d] hover:bg-[#00ff9d]/5"
+              )}
+            >
+              DECODE
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="relative z-10 max-w-6xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-10 crt-monitor">
-        
+      <main className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* Left Column: Controls */}
-        <div className="lg:col-span-5 space-y-8">
-          
-          {/* Mode Switcher */}
-          <div className="space-y-4">
-            <div className="flex p-1.5 bg-terminal-dim/30 border border-terminal-accent/10 rounded-xl backdrop-blur-sm">
-              <button 
-                onClick={() => setMode('encode')}
-                className={cn(
-                  "flex-1 py-4 text-xs font-bold transition-all rounded-lg flex items-center justify-center gap-3 tap-active group relative overflow-hidden",
-                  mode === 'encode' ? "bg-terminal-accent text-terminal-bg shadow-[0_0_15px_rgba(0,255,157,0.3)]" : "hover:bg-terminal-accent/5 opacity-60"
-                )}
-              >
-                <div className="absolute inset-0 bg-white/10 translate-x-full group-hover:translate-x-0 transition-transform duration-300" />
-                <ImageIcon className="w-4 h-4 relative z-10" />
-                <span className="relative z-10">ENCODE_DATA</span>
-              </button>
-              <button 
-                onClick={() => setMode('decode')}
-                className={cn(
-                  "flex-1 py-4 text-xs font-bold transition-all rounded-lg flex items-center justify-center gap-3 tap-active group relative overflow-hidden",
-                  mode === 'decode' ? "bg-terminal-accent text-terminal-bg shadow-[0_0_15px_rgba(0,255,157,0.3)]" : "hover:bg-terminal-accent/5 opacity-60"
-                )}
-              >
-                <div className="absolute inset-0 bg-white/10 translate-x-full group-hover:translate-x-0 transition-transform duration-300" />
-                <Hash className="w-4 h-4 relative z-10" />
-                <span className="relative z-10">DECODE_KEY</span>
-              </button>
+        <div className="lg:col-span-5 space-y-6">
+          <section className="bg-black/40 border border-[#00ff9d]/20 p-5 md:p-8 rounded-sm space-y-8 md:space-y-10 shadow-[0_0_50px_rgba(0,0,0,0.3)]">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-bold flex items-center gap-3 tracking-widest">
+                <Terminal className="w-5 h-5 text-[#00ff9d]" />
+                {mode === 'encode' ? 'ENCRYPTION_ENGINE' : 'DECRYPTION_ENGINE'}
+              </h2>
+              {mode === 'encode' && (
+                <div className="flex items-center gap-3 bg-[#00ff9d]/5 px-3 py-1.5 rounded-sm border border-[#00ff9d]/10">
+                  <span className="text-[9px] font-bold tracking-widest opacity-60 hidden sm:inline">ENCRYPTED_MODE</span>
+                  <button 
+                    onClick={() => setIsEncryptedMode(!isEncryptedMode)}
+                    className={cn(
+                      "w-10 h-5 rounded-full relative transition-colors",
+                      isEncryptedMode ? "bg-[#00ff9d]" : "bg-[#00ff9d]/20"
+                    )}
+                  >
+                    <div className={cn(
+                      "absolute top-1 left-1 w-3 h-3 bg-black rounded-full transition-transform",
+                      isEncryptedMode ? "translate-x-5" : "translate-x-0"
+                    )} />
+                  </button>
+                </div>
+              )}
             </div>
 
-            {/* Encryption Toggle & Password */}
-            <div className="p-4 bg-terminal-dim/20 border border-terminal-accent/10 rounded-xl space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Lock className={cn("w-4 h-4 transition-colors", isEncryptedMode ? "text-terminal-accent" : "text-terminal-accent/30")} />
-                  <span className="text-[10px] font-bold tracking-widest uppercase">Encrypted_Mode</span>
-                </div>
-                <button 
-                  onClick={() => setIsEncryptedMode(!isEncryptedMode)}
-                  className={cn(
-                    "w-10 h-5 rounded-full relative transition-colors",
-                    isEncryptedMode ? "bg-terminal-accent" : "bg-terminal-accent/10"
-                  )}
-                >
-                  <motion.div 
-                    animate={{ x: isEncryptedMode ? 22 : 2 }}
-                    className="absolute top-1 left-0 w-3 h-3 bg-terminal-bg rounded-full"
+            <div className="space-y-6 md:space-y-8">
+              <div className="space-y-3">
+                <label className="text-[10px] font-bold tracking-widest opacity-60 flex items-center gap-2 uppercase">
+                  <Lock className="w-3 h-3" />
+                  SECURE_PASSWORD {isEncryptedMode && <span className="text-red-500 font-black">!</span>}
+                </label>
+                <div className="relative">
+                  <input 
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="ENTER_PASSWORD..."
+                    className="w-full bg-black/60 border border-[#00ff9d]/20 rounded-sm py-4 px-5 text-sm focus:border-[#00ff9d] outline-none transition-all placeholder:opacity-20 font-mono"
                   />
-                </button>
+                  <button 
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-[#00ff9d]/40 hover:text-[#00ff9d] p-2"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
               </div>
 
-              <AnimatePresence>
-                {isEncryptedMode && (
-                  <motion.div 
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="overflow-hidden space-y-2"
+              {mode === 'encode' ? (
+                <div className="space-y-6">
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full border-2 border-dashed border-[#00ff9d]/20 rounded-sm py-16 md:py-20 flex flex-col items-center justify-center gap-5 hover:border-[#00ff9d]/60 transition-all group bg-[#00ff9d]/[0.02] active:scale-[0.98]"
                   >
                     <div className="relative">
-                      <input 
-                        type={showPassword ? "text" : "password"}
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        placeholder="ENTER_SECURE_PASSWORD..."
-                        className="w-full bg-terminal-bg/50 border border-terminal-accent/20 rounded-lg py-3 px-4 text-xs font-mono focus:border-terminal-accent outline-none transition-all placeholder:opacity-20"
-                      />
-                      <button 
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-terminal-accent/40 hover:text-terminal-accent transition-colors"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
+                      <div className="absolute inset-0 bg-[#00ff9d]/20 blur-xl rounded-full scale-0 group-hover:scale-150 transition-transform duration-500" />
+                      <Upload className="w-12 h-12 text-[#00ff9d]/40 group-hover:text-[#00ff9d] transition-colors relative z-10" />
                     </div>
-                    <p className="text-[9px] opacity-40 font-mono flex items-center gap-1.5">
-                      <AlertCircle className="w-3 h-3" />
-                      PASSWORD_REQUIRED_FOR_DECRYPTION
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
-
-          {/* Action Area */}
-          <AnimatePresence mode="wait">
-            {mode === 'encode' ? (
-              <motion.div 
-                key="encode"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                className="space-y-4"
-              >
-                <motion.div 
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.99 }}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="group relative min-h-[300px] lg:h-96 border-2 border-dashed border-terminal-accent/20 rounded-2xl flex flex-col items-center justify-center gap-5 cursor-pointer hover:border-terminal-accent/60 transition-all bg-terminal-accent/[0.02] overflow-hidden shadow-[inset_0_0_50px_rgba(0,255,157,0.02)]"
-                >
-                  <motion.div 
-                    animate={{ y: ["0%", "100%", "0%"] }}
-                    transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
-                    className="absolute top-0 left-0 w-full h-1 bg-terminal-accent/20 blur-sm z-0 pointer-events-none"
-                  />
-                  
-                  <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
-                  <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
-                  <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
-                  <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
-                  
-                  <div className="relative">
-                    <div className="absolute inset-0 bg-terminal-accent/20 blur-2xl rounded-full scale-0 group-hover:scale-150 transition-transform duration-700" />
-                    <Upload className="w-16 h-16 text-terminal-accent relative z-10 crt-flicker" />
-                  </div>
-                  
-                  <div className="text-center relative z-10">
-                    <p className="text-sm font-bold tracking-[0.3em] group-hover:text-terminal-accent transition-colors">INGEST_SOURCE_IMAGE</p>
-                    <p className="text-[10px] opacity-40 mt-2 font-mono uppercase tracking-widest">Strictly Lossless Protocol</p>
-                  </div>
-                  
+                    <div className="text-center relative z-10">
+                      <p className="text-xs font-bold tracking-[0.2em]">UPLOAD_SOURCE_IMAGE</p>
+                      <p className="text-[10px] opacity-40 mt-2 font-mono uppercase">PNG | JPG | WEBP</p>
+                    </div>
+                  </button>
                   <input 
                     type="file" 
                     ref={fileInputRef} 
@@ -834,394 +425,327 @@ export default function App() {
                     accept="image/*" 
                     className="hidden" 
                   />
-                </motion.div>
-              </motion.div>
-            ) : (
-              <motion.div 
-                key="decode"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-6"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-terminal-accent uppercase tracking-[0.2em]">Neural Vault Key Input</label>
-                    <span className="text-[9px] opacity-40 font-mono">AWAITING_PAYLOAD</span>
+                  
+                  <div className="bg-[#00ff9d]/5 p-5 border border-[#00ff9d]/10 rounded-sm space-y-3">
+                    <div className="flex items-center gap-2 text-[10px] font-bold tracking-widest">
+                      <AlertCircle className="w-4 h-4 text-[#00ff9d]" />
+                      SYSTEM_ADVISORY
+                    </div>
+                    <ul className="text-[10px] opacity-60 font-mono space-y-2 leading-relaxed">
+                      <li className="flex gap-2"><span>//</span> RECONSTRUCTION IS 100% LOSSLESS.</li>
+                      <li className="flex gap-2"><span>//</span> LARGE IMAGES = LONG VAULT CODES.</li>
+                      <li className="flex gap-2"><span>//</span> USE .TXT EXPORT FOR MASSIVE PAYLOADS.</li>
+                    </ul>
                   </div>
-                  <textarea 
-                    value={inputSeed}
-                    onChange={(e) => setInputSeed(e.target.value)}
-                    placeholder="Paste Neural Vault Key here..."
-                    className="w-full h-48 lg:h-72 bg-terminal-bg/50 border border-terminal-accent/20 rounded-xl p-5 text-xs focus:border-terminal-accent focus:ring-2 focus:ring-terminal-accent/10 outline-none font-mono resize-none transition-all placeholder:opacity-20"
-                  />
                 </div>
-                <motion.button 
-                  whileHover={{ scale: 1.02, boxShadow: "0 0 30px rgba(0,255,157,0.3)" }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={handleDecode}
-                  disabled={!inputSeed || isProcessing}
-                  className="w-full py-5 bg-terminal-accent text-terminal-bg font-bold rounded-xl flex items-center justify-center gap-3 disabled:opacity-30 disabled:cursor-not-allowed transition-all glitch-hover relative group overflow-hidden"
-                >
-                  <div className="absolute inset-0 bg-white/20 -translate-x-full group-hover:translate-x-0 transition-transform duration-500" />
-                  {isProcessing ? <RefreshCw className="w-5 h-5 animate-spin relative z-10" /> : <Hash className="w-5 h-5 relative z-10" />}
-                  <span className="relative z-10">RECONSTRUCT_IMAGE</span>
-                </motion.button>
-              </motion.div>
-            )}
-          </AnimatePresence>
+              ) : (
+                <div className="space-y-6">
+                  <div className="space-y-3">
+                    <label className="text-[10px] font-bold tracking-widest opacity-60 flex items-center gap-2 uppercase">
+                      <Hash className="w-3 h-3" />
+                      PAYLOAD_INPUT
+                    </label>
+                    <textarea 
+                      value={inputCode}
+                      onChange={(e) => setInputCode(e.target.value)}
+                      placeholder="PASTE_PAYLOAD_HERE..."
+                      className="w-full h-40 bg-black/60 border border-[#00ff9d]/20 rounded-sm p-5 text-sm focus:border-[#00ff9d] outline-none transition-all placeholder:opacity-20 font-mono resize-none leading-relaxed"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <button 
+                      onClick={startScanner}
+                      className="flex items-center justify-center gap-3 py-4 bg-[#00ff9d]/10 border border-[#00ff9d]/20 rounded-sm text-xs font-bold hover:bg-[#00ff9d]/20 transition-all active:scale-[0.97]"
+                    >
+                      <Scan className="w-5 h-5" />
+                      SCAN_QR
+                    </button>
+                    <button 
+                      onClick={() => decodeFileInputRef.current?.click()}
+                      className="flex items-center justify-center gap-3 py-4 bg-[#00ff9d]/10 border border-[#00ff9d]/20 rounded-sm text-xs font-bold hover:bg-[#00ff9d]/20 transition-all active:scale-[0.97]"
+                    >
+                      <FileText className="w-5 h-5" />
+                      UPLOAD_TXT
+                    </button>
+                    <input 
+                      type="file" 
+                      ref={decodeFileInputRef} 
+                      onChange={handleFileDecodeUpload} 
+                      accept=".txt" 
+                      className="hidden" 
+                    />
+                  </div>
+
+                  <button 
+                    onClick={() => handleDecode()}
+                    disabled={!inputCode || isProcessing}
+                    className="w-full py-5 bg-[#00ff9d] text-black font-black rounded-sm flex items-center justify-center gap-4 disabled:opacity-30 disabled:cursor-not-allowed transition-all shadow-[0_0_20px_rgba(0,255,157,0.3)] active:scale-[0.98] uppercase tracking-widest"
+                  >
+                    {isProcessing ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Unlock className="w-6 h-6" />}
+                    RECONSTRUCT_IMAGE
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
         </div>
 
-        {/* Right Column: Output / Preview */}
-        <div className="lg:col-span-7">
-          <div className="h-full border border-terminal-accent/20 rounded-2xl bg-terminal-bg/60 backdrop-blur-xl overflow-hidden flex flex-col shadow-2xl relative">
-            
-            {/* Preview Header */}
-            <div className="p-5 border-b border-terminal-accent/10 flex items-center justify-between bg-terminal-dim/20">
-              <div className="flex items-center gap-3">
-                <div className={cn("w-2.5 h-2.5 rounded-full", state.dataUrl ? "bg-terminal-accent animate-pulse shadow-[0_0_10px_#00ff9d]" : "bg-terminal-accent/20")} />
-                <span className="text-[11px] font-bold uppercase tracking-[0.3em]">Output_Terminal</span>
-              </div>
+        {/* Right Column: Output/Preview */}
+        <div className="lg:col-span-7 space-y-6">
+          <section className="bg-black/40 border border-[#00ff9d]/20 p-5 md:p-8 rounded-sm min-h-[400px] md:min-h-[500px] flex flex-col shadow-[0_0_50px_rgba(0,0,0,0.3)]">
+            <div className="flex items-center justify-between mb-8">
+              <h2 className="text-sm font-bold flex items-center gap-3 tracking-widest">
+                <ImageIcon className="w-5 h-5 text-[#00ff9d]" />
+                OUTPUT_PREVIEW
+              </h2>
               {state.dataUrl && (
-                <div className="flex items-center gap-3">
-                  <button 
-                    onClick={() => setShowPreview(!showPreview)}
-                    className="p-2 hover:bg-terminal-accent/10 rounded-lg transition-colors tap-active"
-                    title={showPreview ? "Hide Preview" : "Show Preview"}
-                  >
-                    {showPreview ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
+                <button 
+                  onClick={reset}
+                  className="text-[10px] font-bold text-[#00ff9d]/40 hover:text-[#00ff9d] transition-all flex items-center gap-2 uppercase tracking-widest p-2"
+                >
+                  <X className="w-4 h-4" />
+                  RESET
+                </button>
+              )}
+            </div>
+
+            <div className="flex-1 flex flex-col items-center justify-center">
+              {isProcessing ? (
+                <div className="text-center space-y-6">
+                  <div className="w-20 h-20 border-4 border-[#00ff9d]/10 border-t-[#00ff9d] rounded-full animate-spin mx-auto shadow-[0_0_20px_rgba(0,255,157,0.2)]" />
+                  <p className="text-xs font-bold animate-pulse tracking-[0.3em] uppercase text-[#00ff9d]">{processingStep}</p>
+                </div>
+              ) : state.dataUrl ? (
+                <div className="w-full space-y-8">
+                  <div className="relative group max-h-[350px] md:max-h-[450px] overflow-hidden border border-[#00ff9d]/20 rounded-sm bg-black/40">
+                    <img 
+                      src={state.dataUrl} 
+                      alt="Reconstructed" 
+                      className="w-full h-auto object-contain mx-auto"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-6 backdrop-blur-sm">
+                      <button 
+                        onClick={handleDownload}
+                        className="p-4 bg-[#00ff9d] text-black rounded-full hover:scale-110 transition-transform shadow-[0_0_20px_rgba(0,255,157,0.4)]"
+                        title="Download Image"
+                      >
+                        <Download className="w-8 h-8" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="p-4 bg-[#00ff9d]/5 border border-[#00ff9d]/10 rounded-sm">
+                      <p className="text-[9px] font-bold opacity-40 uppercase tracking-widest mb-1">Resolution</p>
+                      <p className="text-sm font-mono text-[#00ff9d]">{state.dimensions?.width} x {state.dimensions?.height} PX</p>
+                    </div>
+                    <div className="p-4 bg-[#00ff9d]/5 border border-[#00ff9d]/10 rounded-sm">
+                      <p className="text-[9px] font-bold opacity-40 uppercase tracking-widest mb-1">Payload_Size</p>
+                      <p className="text-sm font-mono text-[#00ff9d]">{((state.encryptedCode || state.rawCode)?.length || 0).toLocaleString()} CHR</p>
+                    </div>
+                  </div>
+
                   <button 
                     onClick={handleDownload}
-                    className="p-2 hover:bg-terminal-accent/10 rounded-lg transition-colors text-terminal-accent tap-active"
-                    title="Download Result"
+                    className="w-full py-4 bg-[#00ff9d]/10 border border-[#00ff9d]/30 text-[#00ff9d] font-black rounded-sm flex items-center justify-center gap-3 hover:bg-[#00ff9d] hover:text-black transition-all active:scale-[0.98] uppercase tracking-widest text-xs"
                   >
-                    <Download className="w-4 h-4" />
+                    <Download className="w-5 h-5" />
+                    DOWNLOAD_IMAGE
                   </button>
-                  <button 
-                    onClick={reset}
-                    className="p-2 hover:bg-red-500/10 rounded-lg transition-colors text-red-500 tap-active"
-                    title="Clear Terminal"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-            </div>
 
-            {/* Preview Content */}
-            <div className="flex-1 p-4 md:p-6 flex flex-col items-center justify-center relative min-h-[450px] lg:min-h-[550px]">
-              {!state.dataUrl && !isProcessing && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 0.15 }}
-                  className="text-center"
-                >
-                  <ImageIcon className="w-24 h-24 mx-auto mb-6" />
-                  <p className="text-lg font-bold tracking-[0.5em]">SYSTEM_IDLE</p>
-                  <p className="text-[10px] mt-4 font-mono">AWAITING_DATA_INGESTION</p>
-                </motion.div>
-              )}
-
-              {isProcessing && (
-                <div className="text-center space-y-6">
-                  <div className="relative w-32 h-32 mx-auto">
-                    <motion.div 
-                      animate={{ y: ["0%", "120px", "0%"] }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      className="absolute top-0 left-0 w-full h-0.5 bg-terminal-accent/40 blur-sm z-20 pointer-events-none"
-                    />
-                    <motion.div 
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-                      className="absolute inset-0 border-[3px] border-terminal-accent border-t-transparent rounded-full shadow-[0_0_20px_rgba(0,255,157,0.2)]"
-                    />
-                    <motion.div 
-                      animate={{ rotate: -360 }}
-                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
-                      className="absolute inset-4 border-[2px] border-terminal-accent/30 border-b-transparent rounded-full"
-                    />
-                    <Cpu className="absolute inset-0 m-auto w-8 h-8 text-terminal-accent crt-flicker" />
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-bold tracking-[0.3em] text-terminal-accent animate-pulse">
-                      <TypingText text={processingStep} />
-                    </p>
-                    <div className="w-40 h-1 bg-terminal-accent/10 mx-auto rounded-full overflow-hidden">
-                      <motion.div 
-                        initial={{ x: '-100%' }}
-                        animate={{ x: '100%' }}
-                        transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-                        className="w-full h-full bg-terminal-accent"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {state.dataUrl && !isProcessing && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="w-full h-full flex flex-col items-center gap-6 md:gap-8"
-                >
-                  {showPreview && (
-                    <div className="relative group perspective-1000 w-full flex justify-center">
-                      <motion.div 
-                        whileHover={{ rotateY: 5, rotateX: -5 }}
-                        className="relative z-10 group/img overflow-hidden rounded-xl max-w-full"
-                      >
-                        <div className="absolute -inset-8 bg-terminal-accent/10 blur-3xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-                        
-                        <div className="absolute inset-0 z-20 pointer-events-none opacity-0 group-hover/img:opacity-30 transition-opacity duration-500 overflow-hidden rounded-xl">
-                          <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-terminal-accent/20 to-transparent -translate-x-full group-hover/img:translate-x-full transition-transform duration-1000" />
-                        </div>
-
-                        <div className="img-scanline opacity-0 group-hover/img:opacity-100 transition-opacity" />
-
-                        <img 
-                          src={state.dataUrl} 
-                          alt="Processed" 
-                          className="max-w-full max-h-[350px] md:max-h-[400px] object-contain border border-terminal-accent/40 rounded-xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] relative z-10"
-                          referrerPolicy="no-referrer"
-                        />
-                      </motion.div>
-                      
-                      <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 flex gap-3 opacity-0 group-hover:opacity-100 transition-all duration-300 translate-y-2 group-hover:translate-y-0 z-20">
-                        <button 
-                          onClick={handleDownload}
-                          className="px-4 py-2 bg-terminal-accent text-terminal-bg rounded-lg font-bold text-[10px] flex items-center gap-2 shadow-xl hover:scale-105 transition-transform tap-active"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          DOWNLOAD_IMAGE
-                        </button>
-                        <button 
-                          onClick={() => handleDownloadSeed(state.seed || "", isEncryptedMode ? "vault_key.txt" : "raw_key.txt")}
-                          className="px-4 py-2 bg-terminal-dim text-terminal-accent border border-terminal-accent/30 rounded-lg font-bold text-[10px] flex items-center gap-2 shadow-xl hover:scale-105 transition-transform tap-active"
-                        >
-                          <Terminal className="w-3.5 h-3.5" />
-                          {isEncryptedMode ? "DOWNLOAD_VAULT_KEY" : "DOWNLOAD_RAW_KEY"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="w-full space-y-4 md:space-y-6">
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                      <motion.div 
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.1 }}
-                        className="p-3 bg-terminal-dim/20 border border-terminal-accent/10 rounded-xl backdrop-blur-md"
-                      >
-                        <p className="text-[8px] opacity-40 uppercase mb-1 font-mono">Dimensions</p>
-                        <p className="text-[10px] font-bold text-terminal-accent">{state.dimensions?.width} x {state.dimensions?.height} PX</p>
-                      </motion.div>
-                      <motion.div 
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.2 }}
-                        className="p-3 bg-terminal-dim/20 border border-terminal-accent/10 rounded-xl backdrop-blur-md"
-                      >
-                        <p className="text-[8px] opacity-40 uppercase mb-1 font-mono">Payload_Size</p>
-                        <p className="text-[10px] font-bold text-terminal-accent">{(state.seed?.length || 0).toLocaleString()} CHR</p>
-                      </motion.div>
-                      <motion.div 
-                        initial={{ opacity: 0, x: -20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: 0.3 }}
-                        className="hidden md:block p-3 bg-terminal-dim/20 border border-terminal-accent/10 rounded-xl backdrop-blur-md"
-                      >
-                        <p className="text-[8px] opacity-40 uppercase mb-1 font-mono">Encryption</p>
-                        <p className="text-[10px] font-bold text-terminal-accent">LZ-BABEL-777</p>
-                      </motion.div>
-                    </div>
-
-                    <div className="relative group">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[9px] font-bold text-terminal-accent uppercase tracking-[0.3em]">
-                          {state.seed?.startsWith('VAULT:') ? "Local Vault Code" : "Neural Vault Key"}
-                        </p>
-                        <span className="text-[8px] opacity-30 font-mono">
-                          {state.seed?.startsWith('VAULT:') ? "LOCAL_REFERENCE" : "ALGORITHM_DATA"}
-                        </span>
-                      </div>
-                      
-                      <div className="space-y-4">
-                        <div className="relative">
-                          <div className="w-full h-20 bg-terminal-bg/80 border border-terminal-accent/20 rounded-xl p-3 text-[8px] break-all overflow-y-auto font-mono opacity-60 leading-relaxed scrollbar-hide select-all cursor-text">
-                            {state.seed}
-                          </div>
-                          <div className="absolute bottom-3 right-3 flex gap-2">
+                  <div className="space-y-6">
+                    {/* Encrypted Output */}
+                    {state.encryptedCode && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[10px] font-bold text-[#00ff9d] tracking-widest uppercase flex items-center gap-2">
+                            <Lock className="w-3 h-3" />
+                            ENCRYPTED_PAYLOAD
+                          </label>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleCopy(state.encryptedCode!)} className="p-2.5 hover:bg-[#00ff9d]/10 rounded-sm transition-colors text-[#00ff9d]/60 hover:text-[#00ff9d]" title="Copy Payload"><Copy className="w-4 h-4" /></button>
                             <button 
-                              onClick={() => handleCopyRefined(state.seed || "")}
+                              onClick={() => {
+                                if (state.encryptedCode!.length > QR_MAX_LENGTH) {
+                                  triggerToast("PAYLOAD_TOO_LARGE_FOR_QR: USE_TXT_EXPORT");
+                                } else {
+                                  setShowQrModal({ show: true, data: state.encryptedCode });
+                                }
+                              }} 
                               className={cn(
-                                "px-3 py-1.5 rounded-lg text-[9px] font-bold flex items-center gap-2 transition-all tap-active shadow-lg",
-                                copied ? "bg-green-500 text-white" : "bg-terminal-accent text-terminal-bg hover:shadow-[0_0_15px_rgba(0,255,157,0.3)]"
+                                "p-2.5 rounded-sm transition-colors",
+                                state.encryptedCode!.length > QR_MAX_LENGTH ? "opacity-20 cursor-not-allowed" : "hover:bg-[#00ff9d]/10 text-[#00ff9d]/60 hover:text-[#00ff9d]"
                               )}
+                              title={state.encryptedCode!.length > QR_MAX_LENGTH ? "Payload too large for QR" : "Generate QR Code"}
                             >
-                              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                              <span>{copied ? "COPIED" : state.seed?.startsWith('VAULT:') ? "COPY_CODE" : "COPY_VAULT_KEY"}</span>
+                              <QrCode className="w-4 h-4" />
                             </button>
-                            <button 
-                              onClick={() => handleDownloadSeed(state.seed || "", state.seed?.startsWith('VAULT:') ? "vault_code.txt" : "vault_key.txt")}
-                              className="px-3 py-1.5 bg-terminal-dim text-terminal-accent border border-terminal-accent/30 rounded-lg font-bold text-[9px] flex items-center gap-2 shadow-lg hover:bg-terminal-dim/80 transition-all tap-active"
-                            >
-                              <Download className="w-3 h-3" />
-                              {state.seed?.startsWith('VAULT:') ? "SAVE_CODE" : "SAVE_VAULT_KEY"}
-                            </button>
+                            <button onClick={() => handleDownloadTxt(state.encryptedCode!, 'encrypted_payload')} className="p-2.5 hover:bg-[#00ff9d]/10 rounded-sm transition-colors text-[#00ff9d]/60 hover:text-[#00ff9d]" title="Download .txt"><Download className="w-4 h-4" /></button>
                           </div>
                         </div>
-
-                        <div className="pt-2 border-t border-terminal-accent/10 space-y-3">
-                          {!state.seed?.startsWith('VAULT:') && (
-                            <div className="flex flex-col gap-2">
-                              <div className="flex items-center justify-between">
-                                <p className="text-[8px] font-bold text-terminal-accent/40 uppercase tracking-widest">Local Storage Optimization</p>
-                                <span className="text-[7px] opacity-20 font-mono">REDUCE_KEY_SIZE_LOCALLY</span>
-                              </div>
-                              <button 
-                                onClick={handleSaveToLocalVault}
-                                className="w-full px-3 py-2 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
-                              >
-                                <Zap className="w-3 h-3" />
-                                GENERATE_LOCAL_VAULT_CODE (SHORT_KEY)
-                              </button>
-                              <p className="text-[7px] opacity-30 text-center italic">Note: Local codes only work on this device. Use the full Vault Key for sharing.</p>
-                            </div>
-                          )}
-                          {isEncryptedMode && (
-                            <div className="flex flex-col gap-2">
-                              <div className="flex items-center justify-between">
-                                <p className="text-[8px] font-bold text-terminal-accent/40 uppercase tracking-widest">Encrypted Payload (Shareable)</p>
-                                <span className="text-[7px] opacity-20 font-mono">FULL_ENCRYPTED_DATA</span>
-                              </div>
-                              <div className="flex gap-2">
-                                <button 
-                                  onClick={() => handleCopyRefined(state.encryptedPayload || "")}
-                                  className="flex-1 px-3 py-1.5 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
-                                >
-                                  <Copy className="w-3 h-3" />
-                                  COPY_ENCRYPTED_PAYLOAD
-                                </button>
-                                <button 
-                                  onClick={() => handleDownloadSeed(state.encryptedPayload || "", "encrypted_payload.txt")}
-                                  className="flex-1 px-3 py-1.5 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
-                                >
-                                  <Download className="w-3 h-3" />
-                                  SAVE_ENCRYPTED_PAYLOAD
-                                </button>
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="flex flex-col gap-2">
-                            <div className="flex items-center justify-between">
-                              <button
-                                onClick={() => setShowRealSeed(!showRealSeed)}
-                                className="text-[9px] font-bold text-terminal-accent/60 hover:text-terminal-accent uppercase tracking-[0.2em] flex items-center gap-2 transition-colors"
-                              >
-                                {showRealSeed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                                {showRealSeed ? "HIDE_REAL_SEED" : "SHOW_REAL_SEED"}
-                              </button>
-                              {showRealSeed && isEncryptedMode && (
-                                <span className="text-[8px] text-red-500/50 font-mono animate-pulse">WARNING: UNENCRYPTED_DATA_EXPOSED</span>
-                              )}
-                            </div>
-                            
-                            <AnimatePresence>
-                              {showRealSeed && (
-                                <motion.div 
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: "auto" }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  className="relative overflow-hidden space-y-3"
-                                >
-                                  <div className="flex items-center justify-between">
-                                    <p className="text-[8px] font-bold text-terminal-accent/40 uppercase tracking-widest">Raw Algorithm Data (Unencrypted)</p>
-                                    <span className="text-[7px] opacity-20 font-mono">RAW_IMAGE_PAYLOAD</span>
-                                  </div>
-                                  <div className="w-full h-24 bg-terminal-accent/5 border border-terminal-accent/10 rounded-xl p-3 text-[8px] break-all overflow-y-auto font-mono opacity-60 leading-relaxed scrollbar-hide select-all cursor-text">
-                                    {state.realSeed}
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <button 
-                                      onClick={() => handleCopyRefined(state.realSeed || "")}
-                                      className="flex-1 px-3 py-1.5 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
-                                    >
-                                      <Copy className="w-3 h-3" />
-                                      COPY_RAW_DATA
-                                    </button>
-                                    <button 
-                                      onClick={() => handleDownloadSeed(state.realSeed || "", "raw_data.txt")}
-                                      className="flex-1 px-3 py-1.5 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
-                                    >
-                                      <Download className="w-3 h-3" />
-                                      SAVE_RAW_DATA
-                                    </button>
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
+                        <div className="w-full h-24 bg-black/80 border border-[#00ff9d]/20 rounded-sm p-4 text-[9px] break-all overflow-y-auto font-mono opacity-60 leading-relaxed custom-scrollbar">
+                          {state.encryptedCode}
                         </div>
                       </div>
+                    )}
+
+                    {/* Raw Output */}
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <label className="text-[10px] font-bold opacity-40 tracking-widest uppercase flex items-center gap-2">
+                            <Unlock className="w-3 h-3" />
+                            RAW_PAYLOAD
+                          </label>
+                          <button 
+                            onClick={() => setShowRawCode(!showRawCode)}
+                            className="text-[9px] font-bold text-[#00ff9d] hover:underline uppercase tracking-widest p-1"
+                          >
+                            {showRawCode ? 'HIDE' : 'SHOW_RAW'}
+                          </button>
+                        </div>
+                        {showRawCode && (
+                          <div className="flex gap-2">
+                            <button onClick={() => handleCopy(state.rawCode!)} className="p-2.5 hover:bg-[#00ff9d]/10 rounded-sm transition-colors text-[#00ff9d]/60 hover:text-[#00ff9d]" title="Copy Payload"><Copy className="w-4 h-4" /></button>
+                            <button 
+                              onClick={() => {
+                                if (state.rawCode!.length > QR_MAX_LENGTH) {
+                                  triggerToast("PAYLOAD_TOO_LARGE_FOR_QR: USE_TXT_EXPORT");
+                                } else {
+                                  setShowQrModal({ show: true, data: state.rawCode });
+                                }
+                              }} 
+                              className={cn(
+                                "p-2.5 rounded-sm transition-colors",
+                                state.rawCode!.length > QR_MAX_LENGTH ? "opacity-20 cursor-not-allowed" : "hover:bg-[#00ff9d]/10 text-[#00ff9d]/60 hover:text-[#00ff9d]"
+                              )}
+                              title={state.rawCode!.length > QR_MAX_LENGTH ? "Payload too large for QR" : "Generate QR Code"}
+                            >
+                              <QrCode className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => handleDownloadTxt(state.rawCode!, 'raw_payload')} className="p-2.5 hover:bg-[#00ff9d]/10 rounded-sm transition-colors text-[#00ff9d]/60 hover:text-[#00ff9d]" title="Download .txt"><Download className="w-4 h-4" /></button>
+                          </div>
+                        )}
+                      </div>
+                      {showRawCode && (
+                        <div className="w-full h-24 bg-black/80 border border-[#00ff9d]/20 rounded-sm p-4 text-[9px] break-all overflow-y-auto font-mono opacity-60 leading-relaxed custom-scrollbar">
+                          {state.rawCode}
+                        </div>
+                      )}
                     </div>
                   </div>
-                </motion.div>
+                </div>
+              ) : (
+                <div className="text-center opacity-10 space-y-6 py-20">
+                  <ImageIcon className="w-24 h-24 mx-auto" />
+                  <p className="text-xs font-bold tracking-[0.5em] uppercase">AWAITING_PAYLOAD</p>
+                </div>
               )}
             </div>
-
-            {/* Footer Stats */}
-            <div className="p-4 border-t border-terminal-accent/10 bg-terminal-dim/10 flex items-center justify-between text-[9px] font-bold tracking-widest opacity-30">
-              <div className="flex gap-6">
-                <span className="flex items-center gap-1.5 hover:opacity-100 transition-opacity cursor-default group">
-                  <div className="w-1 h-1 bg-terminal-accent rounded-full group-hover:animate-ping" />
-                  <span className="group-hover:text-terminal-accent transition-colors">SYSTEM_READY</span>
-                </span>
-                <span className="flex items-center gap-1.5 hover:opacity-100 transition-opacity cursor-default group">
-                  <div className="w-1 h-1 bg-terminal-accent rounded-full group-hover:animate-ping" />
-                  <span className="group-hover:text-terminal-accent transition-colors">ENCRYPTION_ACTIVE</span>
-                </span>
-              </div>
-            </div>
-          </div>
+          </section>
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="relative z-10 max-w-6xl mx-auto p-10 flex flex-col items-center gap-6">
-        <div className="w-20 h-[1px] bg-terminal-accent/30" />
-        <div className="flex items-center gap-6">
-          <p className="text-[11px] tracking-[0.2em] font-mono opacity-40">
-            - by 9r4n4y
-          </p>
-          <motion.a 
-            href="https://github.com/9r4n4y"
-            target="_blank"
-            rel="noopener noreferrer"
-            whileHover={{ scale: 1.1, color: "#00ff9d" }}
-            className="p-2 bg-terminal-accent/5 border border-terminal-accent/20 rounded-full text-terminal-accent/40 hover:border-terminal-accent transition-all"
+      {/* QR Modal */}
+      <AnimatePresence>
+        {showQrModal.show && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 backdrop-blur-sm"
+            onClick={() => setShowQrModal({ show: false, data: null })}
           >
-            <Github className="w-5 h-5" />
-          </motion.a>
-        </div>
-      </footer>
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-white p-8 rounded-sm max-w-sm w-full space-y-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between text-black">
+                <h3 className="text-xs font-bold">PAYLOAD_QR_CODE</h3>
+                <button onClick={() => setShowQrModal({ show: false, data: null })}><X className="w-4 h-4" /></button>
+              </div>
+              <div className="bg-white p-4 flex items-center justify-center border border-black/10">
+                {showQrModal.data && (
+                  <QRCodeSVG 
+                    value={showQrModal.data} 
+                    size={250}
+                    level="L"
+                    includeMargin={true}
+                  />
+                )}
+              </div>
+              <p className="text-[9px] text-black/60 text-center leading-relaxed">
+                Scan this code with PHOTOSEEDER777 on another device to reconstruct the image.
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Scanner Overlay */}
+      <AnimatePresence>
+        {showScanner && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black flex flex-col"
+          >
+            <div className="p-6 flex items-center justify-between border-b border-[#00ff9d]/20">
+              <h3 className="text-xs font-bold">SCANNING_PAYLOAD...</h3>
+              <button onClick={stopScanner} className="p-2 hover:bg-[#00ff9d]/10 rounded-full"><X className="w-6 h-6" /></button>
+            </div>
+            <div className="flex-1 flex items-center justify-center p-6">
+              <div id="reader" className="w-full max-w-md border border-[#00ff9d]/20 rounded-sm overflow-hidden" />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Toast Notification */}
       <AnimatePresence>
         {showToast && (
-          <motion.div
-            initial={{ y: 100, opacity: 0 }}
+          <motion.div 
+            initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[300] bg-terminal-accent text-terminal-bg px-6 py-3 rounded-xl font-bold text-xs shadow-[0_0_30px_rgba(0,255,157,0.4)] flex items-center gap-3"
+            exit={{ y: 50, opacity: 0 }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[200] bg-[#00ff9d] text-black px-6 py-3 rounded-sm shadow-[0_0_30px_rgba(0,255,157,0.3)] flex items-center gap-3"
           >
-            <div className="w-2 h-2 bg-terminal-bg rounded-full animate-ping" />
-            {toastMessage}
+            <Check className="w-4 h-4" />
+            <span className="text-xs font-bold tracking-widest">{toastMessage}</span>
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Footer */}
+      <footer className="max-w-6xl mx-auto p-8 border-t border-[#00ff9d]/10 mt-12">
+        <div className="flex flex-col md:flex-row items-center justify-between gap-8 opacity-60 text-[11px]">
+          <div className="flex items-center gap-4">
+            <p className="font-bold tracking-widest">by 9r4n4y</p>
+            <a 
+              href="https://github.com/9r4n4y" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="p-2 bg-[#00ff9d]/10 border border-[#00ff9d]/20 rounded-sm hover:bg-[#00ff9d] hover:text-black transition-all flex items-center gap-2"
+            >
+              <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+              </svg>
+              GITHUB
+            </a>
+          </div>
+          <div className="flex items-center gap-8 font-bold tracking-widest">
+            <span className="flex items-center gap-2"><Shield className="w-3 h-3" /> 100%_OFFLINE</span>
+            <span className="flex items-center gap-2"><Lock className="w-3 h-3" /> AES_256_ENCRYPTED</span>
+            <span className="flex items-center gap-2"><ImageIcon className="w-3 h-3" /> LOSSLESS_RECONSTRUCTION</span>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
