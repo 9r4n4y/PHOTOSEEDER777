@@ -48,7 +48,7 @@ const RESOLUTIONS = {
 
 // --- Neural Vault Utility (IndexedDB for high-capacity local storage) ---
 const vaultDB = {
-  dbName: 'PhotoseederVault',
+  dbName: 'PHOTOSEEDER777_Vault',
   storeName: 'vault',
   version: 1,
 
@@ -568,7 +568,7 @@ export default function App() {
     if (!state.dataUrl) return;
     const link = document.createElement('a');
     const ext = state.dataUrl.includes('png') ? 'png' : 'webp';
-    link.download = `photoseeder_${Date.now()}.${ext}`;
+    link.download = `PHOTOSEEDER777_${Date.now()}.${ext}`;
     link.href = state.dataUrl;
     link.click();
   };
@@ -638,7 +638,7 @@ export default function App() {
               <div className="space-y-6 text-sm leading-relaxed opacity-80">
                 <section>
                   <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Encoding</h3>
-                  <p>Select an image from your device. Photoseeder will map every pixel into a unique, encrypted "Neural Seed String". This process is strictly lossless and happens entirely on your hardware.</p>
+                  <p>Select an image from your device. PHOTOSEEDER777 will map every pixel into a unique, encrypted "Neural Seed String". This process is strictly lossless and happens entirely on your hardware.</p>
                 </section>
                 
                 <section>

@@ -1,14 +1,14 @@
-# Photoseeder777: Neural Image Vault
+# PHOTOSEEDER777: Neural Image Vault
 
-**Photoseeder777** is a 100% offline, privacy-first tool designed to convert high-resolution images into compact, shareable "Neural Seeds." It uses advanced client-side encryption and compression to ensure that your data never leaves your device.
+**PHOTOSEEDER777** is a 100% offline, privacy-first tool designed to convert high-resolution images into compact, shareable "Neural Seeds." It uses advanced client-side encryption and compression to ensure that your data never leaves your device.
 
-Whether you are storing sensitive documents or sharing private photos, Photoseeder provides a secure, serverless way to manage your visual data.
+Whether you are storing sensitive documents or sharing private photos, PHOTOSEEDER777 provides a secure, serverless way to manage your visual data.
 
 ---
 
 ## 🛠 How It Works
 
-Photoseeder operates entirely within your browser's memory. It does not use any cloud storage or external APIs for its core functions.
+PHOTOSEEDER777 operates entirely within your browser's memory. It does not use any cloud storage or external APIs for its core functions.
 
 ### 1. Encoding (Image to Seed)
 - **Lossless Processing**: Your image is drawn onto a high-precision HTML5 Canvas.
@@ -30,7 +30,7 @@ Photoseeder operates entirely within your browser's memory. It does not use any 
 
 ## 📦 Installation Guide
 
-Follow these steps to set up Photoseeder on a fresh device.
+Follow these steps to set up PHOTOSEEDER777 on a fresh device.
 
 ### 💻 1. Windows Installation
 1.  **Download Node.js**: Go to [nodejs.org](https://nodejs.org/) and download the **LTS** version. Run the installer and click "Next" until finished.
@@ -38,8 +38,8 @@ Follow these steps to set up Photoseeder on a fresh device.
 3.  **Open Terminal**: Press `Win + R`, type `cmd`, and press Enter.
 4.  **Clone the Project**:
     ```bash
-    git clone https://github.com/YOUR_USERNAME/photoseeder.git
-    cd photoseeder
+    git clone https://github.com/9r4n4y/PHOTOSEEDER777.git
+    cd PHOTOSEEDER777
     ```
 5.  **Install Packages**:
     ```bash
@@ -64,8 +64,8 @@ Follow these steps to set up Photoseeder on a fresh device.
     ```
 3.  **Clone the Project**:
     ```bash
-    git clone https://github.com/YOUR_USERNAME/photoseeder.git
-    cd photoseeder
+    git clone https://github.com/9r4n4y/PHOTOSEEDER777.git
+    cd PHOTOSEEDER777
     ```
 4.  **Install Packages**:
     ```bash
@@ -92,8 +92,8 @@ This guide assumes you have a fresh install of **Termux** from F-Droid.
     ```
 3.  **Clone the Project**:
     ```bash
-    git clone https://github.com/YOUR_USERNAME/photoseeder.git
-    cd photoseeder
+    git clone https://github.com/9r4n4y/PHOTOSEEDER777.git
+    cd PHOTOSEEDER777
     ```
 4.  **Install Packages**:
     ```bash
@@ -110,7 +110,7 @@ This guide assumes you have a fresh install of **Termux** from F-Droid.
 
 ## 🖥 The "Backend" Architecture
 
-Photoseeder is a **Serverless SPA** (Single Page Application). 
+**PHOTOSEEDER777** is a **Serverless SPA** (Single Page Application). 
 
 - **Frontend**: Built with React 19, TypeScript, and Tailwind CSS.
 - **Logic Engine**: Custom hooks handle the heavy lifting of image processing and cryptography.
