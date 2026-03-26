@@ -38,14 +38,6 @@ interface ImageState {
   dimensions: { width: number; height: number } | null;
 }
 
-/// --- Constants ---
-const RESOLUTIONS = {
-  'SD': 256,
-  'HD': 720,
-  'FHD': 1080,
-  'ORIGINAL': 0 // 0 flag for original
-};
-
 // --- Neural Vault Utility (IndexedDB for high-capacity local storage) ---
 const vaultDB = {
   dbName: 'PHOTOSEEDER777_Vault',
@@ -98,7 +90,6 @@ export default function App() {
     dimensions: null,
   });
   const [mode, setMode] = useState<'encode' | 'decode'>('encode');
-  const [targetRes, setTargetRes] = useState<keyof typeof RESOLUTIONS>('ORIGINAL');
   const [inputSeed, setInputSeed] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isEncryptedMode, setIsEncryptedMode] = useState(false);
@@ -295,8 +286,6 @@ export default function App() {
         
         setProcessingStep('ENCRYPTING_NEURAL_PAYLOAD...');
         
-        // Use WebP lossless if supported, fallback to PNG
-        // WebP lossless is typically 25-30% smaller than PNG
         canvas.toBlob((blob) => {
           if (!blob) {
             setIsProcessing(false);
@@ -307,9 +296,6 @@ export default function App() {
           const reader = new FileReader();
           reader.onloadend = async () => {
             const base64data = reader.result as string;
-            // Remove the data URL prefix to save space
-            // Format: [type_flag]:[base64_data]
-            // P = PNG, W = WebP
             const typeFlag = blob.type === 'image/webp' ? 'W' : 'P';
             const cleanData = base64data.split(',')[1];
             const realSeed = `${typeFlag}:${cleanData}`;
@@ -319,23 +305,10 @@ export default function App() {
             if (isEncryptedMode && password) {
               setProcessingStep('APPLYING_AES_ENCRYPTION...');
               try {
-                // Encrypt the seed
                 const encrypted = CryptoJS.AES.encrypt(realSeed, password).toString();
-                // Compress the encrypted string
                 const compressed = LZString.compressToEncodedURIComponent(encrypted);
                 encryptedPayload = `E:${compressed}`;
-                
-                // Generate a short Vault ID for the "short code" requirement
-                const vaultId = Math.random().toString(36).substring(2, 10).toUpperCase();
-                optimizedSeed = `VAULT:${vaultId}`;
-                
-                // Store in high-capacity local vault (IndexedDB)
-                try {
-                  await vaultDB.set(`vault_${vaultId}`, encryptedPayload);
-                } catch (e) {
-                  console.warn('Vault storage failed, falling back to full payload');
-                  optimizedSeed = encryptedPayload;
-                }
+                optimizedSeed = encryptedPayload;
               } catch (err) {
                 console.error('Encryption failed:', err);
                 triggerToast("ENCRYPTION_FAILED: CHECK_PASSWORD");
@@ -344,7 +317,7 @@ export default function App() {
               }
             }
 
-            setProcessingStep('FINALIZING_SEED...');
+            setProcessingStep('FINALIZING_KEY...');
             setTimeout(() => {
               setState({
                 dataUrl: base64data,
@@ -355,7 +328,7 @@ export default function App() {
               });
               setIsProcessing(false);
               setProcessingStep('');
-              triggerToast("ENCODE_SUCCESS: NEURAL_SEED_GENERATED");
+              triggerToast("ENCODE_SUCCESS: NEURAL_VAULT_KEY_GENERATED");
             }, 800);
           };
           reader.readAsDataURL(blob);
@@ -370,22 +343,18 @@ export default function App() {
   const handleDecode = () => {
     if (!inputSeed.trim()) return;
     setIsProcessing(true);
-    setProcessingStep('DECRYPTING SEED...');
+    setProcessingStep('DECRYPTING_KEY...');
     
     setTimeout(() => {
       try {
         let currentSeed = inputSeed.trim();
-        let decryptedSeed: string | null = null;
-        let encryptedPayload: string | null = null;
         
-        // Handle Vault Codes
         if (currentSeed.startsWith('VAULT:')) {
           const vaultId = currentSeed.substring(6);
           vaultDB.get(`vault_${vaultId}`).then(stored => {
             if (stored) {
               processSeed(stored, stored);
             } else {
-              // Fallback to localStorage for backward compatibility
               const oldStored = localStorage.getItem(`vault_${vaultId}`);
               if (oldStored) {
                 processSeed(oldStored, oldStored);
@@ -405,7 +374,7 @@ export default function App() {
 
         processSeed(currentSeed, null);
       } catch (err) {
-        triggerToast('DECODING_ERROR: SEED_CORRUPTED');
+        triggerToast('DECODING_ERROR: KEY_CORRUPTED');
         setIsProcessing(false);
         setProcessingStep('');
       }
@@ -418,7 +387,6 @@ export default function App() {
       let decryptedSeed: string | null = null;
       let encryptedPayload = originalEncryptedPayload;
 
-      // Handle Encrypted Seeds
       if (currentSeed.startsWith('E:')) {
         encryptedPayload = currentSeed;
         if (!password) {
@@ -431,11 +399,9 @@ export default function App() {
         setProcessingStep('DECRYPTING_AES_PAYLOAD...');
         const compressedData = currentSeed.substring(2);
         try {
-          // Decompress first
           const encryptedData = LZString.decompressFromEncodedURIComponent(compressedData);
           if (!encryptedData) throw new Error('Decompression failed');
           
-          // Then decrypt
           const bytes = CryptoJS.AES.decrypt(encryptedData, password);
           const decrypted = bytes.toString(CryptoJS.enc.Utf8);
           if (!decrypted) throw new Error('Invalid password');
@@ -448,8 +414,7 @@ export default function App() {
           return;
         }
       } else if (isEncryptedMode) {
-        // Strict Mode: If Encrypted Mode is ON, don't allow non-encrypted seeds
-        triggerToast('SECURITY_ERROR: ENCRYPTED_SEED_REQUIRED');
+        triggerToast('SECURITY_ERROR: ENCRYPTED_KEY_REQUIRED');
         setIsProcessing(false);
         setProcessingStep('');
         return;
@@ -461,12 +426,11 @@ export default function App() {
         const mime = type === 'W' ? 'image/webp' : 'image/png';
         decompressed = `data:${mime};base64,${data}`;
       } else {
-        // Fallback for old seeds
         decompressed = LZString.decompressFromEncodedURIComponent(currentSeed);
       }
 
       if (!decompressed || !decompressed.startsWith('data:image')) {
-        throw new Error('Invalid seed format');
+        throw new Error('Invalid key format');
       }
       
       const img = new Image();
@@ -487,7 +451,33 @@ export default function App() {
       };
       img.src = decompressed;
     } catch (err) {
-      triggerToast('DECODING_ERROR: SEED_CORRUPTED');
+      triggerToast('DECODING_ERROR: KEY_CORRUPTED');
+      setIsProcessing(false);
+      setProcessingStep('');
+    }
+  };
+
+  const handleSaveToLocalVault = async () => {
+    if (!state.seed || state.seed.startsWith('VAULT:')) return;
+    
+    setIsProcessing(true);
+    setProcessingStep('SAVING_TO_LOCAL_VAULT...');
+    
+    try {
+      const vaultId = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const payload = state.encryptedPayload || state.realSeed || state.seed;
+      await vaultDB.set(`vault_${vaultId}`, payload);
+      
+      setState(prev => ({
+        ...prev,
+        seed: `VAULT:${vaultId}`
+      }));
+      
+      triggerToast(`SAVED: LOCAL_VAULT_CODE: VAULT:${vaultId}`);
+    } catch (err) {
+      console.error('Vault save failed:', err);
+      triggerToast("VAULT_ERROR: STORAGE_FAILED");
+    } finally {
       setIsProcessing(false);
       setProcessingStep('');
     }
@@ -495,14 +485,13 @@ export default function App() {
 
   const handleCopySuccess = () => {
     setCopied(true);
-    triggerToast("SEED_COPIED_TO_CLIPBOARD");
+    triggerToast("KEY_COPIED_TO_CLIPBOARD");
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleCopyRefined = async (textToCopy: string) => {
     if (!textToCopy) return;
     
-    // 1. Try modern Clipboard API
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(textToCopy);
@@ -513,13 +502,10 @@ export default function App() {
       console.warn('Clipboard API failed, trying fallback:', err);
     }
 
-    // 2. Fallback to execCommand('copy')
     try {
       const textArea = document.createElement("textarea");
       textArea.value = textToCopy;
-      textArea.setAttribute('readonly', ''); // Prevent keyboard on mobile
-      
-      // Style to be effectively invisible but technically "visible" to the browser
+      textArea.setAttribute('readonly', '');
       textArea.style.position = "fixed";
       textArea.style.left = "-9999px";
       textArea.style.top = "0";
@@ -530,11 +516,10 @@ export default function App() {
       textArea.style.outline = "none";
       textArea.style.boxShadow = "none";
       textArea.style.background = "transparent";
-      textArea.style.fontSize = "16px"; // Prevent auto-zoom on iOS
+      textArea.style.fontSize = "16px";
       
       document.body.appendChild(textArea);
       
-      // Selection logic
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
       if (isIOS) {
         const range = document.createRange();
@@ -638,22 +623,22 @@ export default function App() {
               <div className="space-y-6 text-sm leading-relaxed opacity-80">
                 <section>
                   <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Encoding</h3>
-                  <p>Select an image from your device. PHOTOSEEDER777 will map every pixel into a unique, encrypted "Neural Seed String". This process is strictly lossless and happens entirely on your hardware.</p>
+                  <p>Select an image from your device. PHOTOSEEDER777 will map every pixel into a unique, encrypted "Neural Vault Key". This process is strictly lossless and happens entirely on your hardware.</p>
                 </section>
                 
                 <section>
                   <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Sharing</h3>
-                  <p>Copy the generated seed string or save it as a file. This string contains all the data needed to reconstruct your image perfectly, without ever uploading it to a cloud server.</p>
+                  <p>Copy the generated Vault Key or save it as a file. This key contains all the data needed to reconstruct your image perfectly using our offline algorithm, without ever needing a database or cloud server.</p>
                 </section>
                 
                 <section>
                   <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Encrypted Mode</h3>
-                  <p>Enable "Encrypted Mode" to protect your seeds with a password. The resulting seed will be AES-encrypted, making it impossible to reconstruct the image without the correct password. This ensures your visual data remains private even if the seed string is intercepted.</p>
+                  <p>Enable "Encrypted Mode" to protect your keys with a password. The resulting key will be AES-encrypted, making it impossible to reconstruct the image without the correct password. This ensures your visual data remains private even if the key string is shared.</p>
                 </section>
                 
                 <section>
                   <h3 className="text-terminal-accent font-bold mb-2 uppercase tracking-widest text-xs">Decoding</h3>
-                  <p>Paste a seed string into the decoder. If the seed is encrypted, you must provide the correct password used during encoding to reconstruct the original image with 1:1 pixel accuracy.</p>
+                  <p>Paste a Vault Key into the decoder. If the key is encrypted, you must provide the correct password used during encoding to reconstruct the original image with 1:1 pixel accuracy.</p>
                 </section>
               </div>
               
@@ -747,7 +732,7 @@ export default function App() {
               >
                 <div className="absolute inset-0 bg-white/10 translate-x-full group-hover:translate-x-0 transition-transform duration-300" />
                 <Hash className="w-4 h-4 relative z-10" />
-                <span className="relative z-10">DECODE_SEED</span>
+                <span className="relative z-10">DECODE_KEY</span>
               </button>
             </div>
 
@@ -821,14 +806,12 @@ export default function App() {
                   onClick={() => fileInputRef.current?.click()}
                   className="group relative min-h-[300px] lg:h-96 border-2 border-dashed border-terminal-accent/20 rounded-2xl flex flex-col items-center justify-center gap-5 cursor-pointer hover:border-terminal-accent/60 transition-all bg-terminal-accent/[0.02] overflow-hidden shadow-[inset_0_0_50px_rgba(0,255,157,0.02)]"
                 >
-                  {/* Scan Line Animation */}
                   <motion.div 
                     animate={{ y: ["0%", "100%", "0%"] }}
                     transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
                     className="absolute top-0 left-0 w-full h-1 bg-terminal-accent/20 blur-sm z-0 pointer-events-none"
                   />
                   
-                  {/* Corner Accents */}
                   <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
                   <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
                   <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-terminal-accent/40 group-hover:border-terminal-accent transition-colors" />
@@ -863,13 +846,13 @@ export default function App() {
               >
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-terminal-accent uppercase tracking-[0.2em]">Babel Seed Input</label>
+                    <label className="text-[10px] font-bold text-terminal-accent uppercase tracking-[0.2em]">Neural Vault Key Input</label>
                     <span className="text-[9px] opacity-40 font-mono">AWAITING_PAYLOAD</span>
                   </div>
                   <textarea 
                     value={inputSeed}
                     onChange={(e) => setInputSeed(e.target.value)}
-                    placeholder="Paste encrypted seed string..."
+                    placeholder="Paste Neural Vault Key here..."
                     className="w-full h-48 lg:h-72 bg-terminal-bg/50 border border-terminal-accent/20 rounded-xl p-5 text-xs focus:border-terminal-accent focus:ring-2 focus:ring-terminal-accent/10 outline-none font-mono resize-none transition-all placeholder:opacity-20"
                   />
                 </div>
@@ -990,12 +973,10 @@ export default function App() {
                       >
                         <div className="absolute -inset-8 bg-terminal-accent/10 blur-3xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
                         
-                        {/* Holographic Overlay */}
                         <div className="absolute inset-0 z-20 pointer-events-none opacity-0 group-hover/img:opacity-30 transition-opacity duration-500 overflow-hidden rounded-xl">
                           <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-terminal-accent/20 to-transparent -translate-x-full group-hover/img:translate-x-full transition-transform duration-1000" />
                         </div>
 
-                        {/* Scan Line on Image */}
                         <div className="img-scanline opacity-0 group-hover/img:opacity-100 transition-opacity" />
 
                         <img 
@@ -1015,11 +996,11 @@ export default function App() {
                           DOWNLOAD_IMAGE
                         </button>
                         <button 
-                          onClick={() => handleDownloadSeed(state.seed || "", isEncryptedMode ? "vault_code.txt" : "seed.txt")}
+                          onClick={() => handleDownloadSeed(state.seed || "", isEncryptedMode ? "vault_key.txt" : "raw_key.txt")}
                           className="px-4 py-2 bg-terminal-dim text-terminal-accent border border-terminal-accent/30 rounded-lg font-bold text-[10px] flex items-center gap-2 shadow-xl hover:scale-105 transition-transform tap-active"
                         >
                           <Terminal className="w-3.5 h-3.5" />
-                          {isEncryptedMode ? "DOWNLOAD_VAULT_CODE" : "DOWNLOAD_SEED"}
+                          {isEncryptedMode ? "DOWNLOAD_VAULT_KEY" : "DOWNLOAD_RAW_KEY"}
                         </button>
                       </div>
                     </div>
@@ -1059,15 +1040,14 @@ export default function App() {
                     <div className="relative group">
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-[9px] font-bold text-terminal-accent uppercase tracking-[0.3em]">
-                          {isEncryptedMode ? "Neural Vault Code" : "Neural Seed String"}
+                          {state.seed?.startsWith('VAULT:') ? "Local Vault Code" : "Neural Vault Key"}
                         </p>
                         <span className="text-[8px] opacity-30 font-mono">
-                          {isEncryptedMode ? "VAULT_REFERENCE" : "ENCRYPTED_DATA"}
+                          {state.seed?.startsWith('VAULT:') ? "LOCAL_REFERENCE" : "ALGORITHM_DATA"}
                         </span>
                       </div>
                       
                       <div className="space-y-4">
-                        {/* Primary Seed Box */}
                         <div className="relative">
                           <div className="w-full h-20 bg-terminal-bg/80 border border-terminal-accent/20 rounded-xl p-3 text-[8px] break-all overflow-y-auto font-mono opacity-60 leading-relaxed scrollbar-hide select-all cursor-text">
                             {state.seed}
@@ -1081,20 +1061,35 @@ export default function App() {
                               )}
                             >
                               {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                              <span>{copied ? "COPIED" : isEncryptedMode ? "COPY_VAULT_CODE" : "COPY_SEED"}</span>
+                              <span>{copied ? "COPIED" : state.seed?.startsWith('VAULT:') ? "COPY_CODE" : "COPY_VAULT_KEY"}</span>
                             </button>
                             <button 
-                              onClick={() => handleDownloadSeed(state.seed || "", isEncryptedMode ? "vault_code.txt" : "seed.txt")}
+                              onClick={() => handleDownloadSeed(state.seed || "", state.seed?.startsWith('VAULT:') ? "vault_code.txt" : "vault_key.txt")}
                               className="px-3 py-1.5 bg-terminal-dim text-terminal-accent border border-terminal-accent/30 rounded-lg font-bold text-[9px] flex items-center gap-2 shadow-lg hover:bg-terminal-dim/80 transition-all tap-active"
                             >
                               <Download className="w-3 h-3" />
-                              {isEncryptedMode ? "SAVE_VAULT_CODE" : "SAVE_SEED"}
+                              {state.seed?.startsWith('VAULT:') ? "SAVE_CODE" : "SAVE_VAULT_KEY"}
                             </button>
                           </div>
                         </div>
 
-                        {/* Secondary Options Section */}
                         <div className="pt-2 border-t border-terminal-accent/10 space-y-3">
+                          {!state.seed?.startsWith('VAULT:') && (
+                            <div className="flex flex-col gap-2">
+                              <div className="flex items-center justify-between">
+                                <p className="text-[8px] font-bold text-terminal-accent/40 uppercase tracking-widest">Local Storage Optimization</p>
+                                <span className="text-[7px] opacity-20 font-mono">REDUCE_KEY_SIZE_LOCALLY</span>
+                              </div>
+                              <button 
+                                onClick={handleSaveToLocalVault}
+                                className="w-full px-3 py-2 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
+                              >
+                                <Zap className="w-3 h-3" />
+                                GENERATE_LOCAL_VAULT_CODE (SHORT_KEY)
+                              </button>
+                              <p className="text-[7px] opacity-30 text-center italic">Note: Local codes only work on this device. Use the full Vault Key for sharing.</p>
+                            </div>
+                          )}
                           {isEncryptedMode && (
                             <div className="flex flex-col gap-2">
                               <div className="flex items-center justify-between">
@@ -1140,25 +1135,29 @@ export default function App() {
                                   initial={{ opacity: 0, height: 0 }}
                                   animate={{ opacity: 1, height: "auto" }}
                                   exit={{ opacity: 0, height: 0 }}
-                                  className="relative overflow-hidden"
+                                  className="relative overflow-hidden space-y-3"
                                 >
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-[8px] font-bold text-terminal-accent/40 uppercase tracking-widest">Raw Algorithm Data (Unencrypted)</p>
+                                    <span className="text-[7px] opacity-20 font-mono">RAW_IMAGE_PAYLOAD</span>
+                                  </div>
                                   <div className="w-full h-24 bg-terminal-accent/5 border border-terminal-accent/10 rounded-xl p-3 text-[8px] break-all overflow-y-auto font-mono opacity-60 leading-relaxed scrollbar-hide select-all cursor-text">
                                     {state.realSeed}
                                   </div>
-                                  <div className="absolute bottom-3 right-3 flex gap-2">
+                                  <div className="flex gap-2">
                                     <button 
                                       onClick={() => handleCopyRefined(state.realSeed || "")}
-                                      className="px-3 py-1.5 bg-terminal-accent/20 text-terminal-accent border border-terminal-accent/30 rounded-lg text-[9px] font-bold flex items-center gap-2 transition-all tap-active shadow-lg hover:bg-terminal-accent/30"
+                                      className="flex-1 px-3 py-1.5 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
                                     >
                                       <Copy className="w-3 h-3" />
-                                      COPY_REAL
+                                      COPY_RAW_DATA
                                     </button>
                                     <button 
-                                      onClick={() => handleDownloadSeed(state.realSeed || "", "real_seed.txt")}
-                                      className="px-3 py-1.5 bg-terminal-dim text-terminal-accent border border-terminal-accent/30 rounded-lg font-bold text-[9px] flex items-center gap-2 shadow-lg hover:bg-terminal-dim/80 transition-all tap-active"
+                                      onClick={() => handleDownloadSeed(state.realSeed || "", "raw_data.txt")}
+                                      className="flex-1 px-3 py-1.5 bg-terminal-accent/10 text-terminal-accent border border-terminal-accent/20 rounded-lg text-[8px] font-bold flex items-center justify-center gap-2 hover:bg-terminal-accent/20 transition-all"
                                     >
                                       <Download className="w-3 h-3" />
-                                      SAVE_REAL
+                                      SAVE_RAW_DATA
                                     </button>
                                   </div>
                                 </motion.div>
