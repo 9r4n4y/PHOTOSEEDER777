@@ -1,0 +1,143 @@
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Courier Prime", monospace;
+  --font-mono: "JetBrains Mono", monospace;
+  
+  --color-terminal-bg: #020202;
+  --color-terminal-accent: #00ff9d;
+  --color-terminal-dim: #00331f;
+  --color-terminal-text: #d0d0d0;
+}
+
+@layer base {
+  body {
+    @apply bg-terminal-bg text-terminal-text font-sans selection:bg-terminal-accent selection:text-terminal-bg;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #020202;
+}
+::-webkit-scrollbar-thumb {
+  background: #00ff9d33;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00ff9d66;
+}
+
+.grid-bg {
+  background-size: 60px 60px;
+  background-image: 
+    linear-gradient(to right, rgba(0, 255, 157, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 255, 157, 0.03) 1px, transparent 1px);
+}
+
+.scanline-overlay {
+  background: linear-gradient(
+    to bottom,
+    transparent 50%,
+    rgba(0, 255, 157, 0.1) 50%
+  );
+  background-size: 100% 4px;
+  animation: scanline 10s linear infinite;
+}
+
+@keyframes scanline {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 100%; }
+}
+
+.noise-bg {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+}
+
+/* Glitch Animation */
+@keyframes glitch-subtle {
+  0% { transform: translate(0); }
+  1% { transform: translate(-1px, 1px); }
+  2% { transform: translate(1px, -1px); }
+  3% { transform: translate(0); }
+  100% { transform: translate(0); }
+}
+
+.glitch-subtle {
+  animation: glitch-subtle 4s infinite;
+}
+
+/* Scanline on Image */
+.img-scanline {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: rgba(0, 255, 157, 0.3);
+  box-shadow: 0 0 10px rgba(0, 255, 157, 0.5);
+  z-index: 30;
+  pointer-events: none;
+  animation: img-scan 3s linear infinite;
+}
+
+@keyframes img-scan {
+  0% { top: -10%; }
+  100% { top: 110%; }
+}
+
+/* CRT Flicker */
+@keyframes flicker {
+  0% { opacity: 0.97; }
+  5% { opacity: 0.95; }
+  10% { opacity: 0.9; }
+  15% { opacity: 0.95; }
+  20% { opacity: 0.98; }
+  25% { opacity: 0.95; }
+  30% { opacity: 0.9; }
+  100% { opacity: 1; }
+}
+
+.crt-flicker {
+  animation: flicker 0.15s infinite;
+}
+
+.crt-monitor {
+  position: relative;
+}
+
+.crt-monitor::after {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: rgba(18, 16, 16, 0.1);
+  opacity: 0;
+  z-index: 2;
+  pointer-events: none;
+  animation: flicker 0.15s infinite;
+}
+
+/* Smooth Tapping Feedback */
+.tap-active:active {
+  transform: scale(0.98);
+  transition: transform 0.1s ease;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
