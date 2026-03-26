@@ -1,6 +1,6 @@
-# Photoseeder: Neural Image Vault
+# Photoseeder777: Neural Image Vault
 
-**Photoseeder** is a 100% offline, privacy-first tool designed to convert high-resolution images into compact, shareable "Neural Seeds." It uses advanced client-side encryption and compression to ensure that your data never leaves your device.
+**Photoseeder777** is a 100% offline, privacy-first tool designed to convert high-resolution images into compact, shareable "Neural Seeds." It uses advanced client-side encryption and compression to ensure that your data never leaves your device.
 
 Whether you are storing sensitive documents or sharing private photos, Photoseeder provides a secure, serverless way to manage your visual data.
 
